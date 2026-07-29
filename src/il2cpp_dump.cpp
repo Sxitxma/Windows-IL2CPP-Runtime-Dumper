@@ -47,6 +47,8 @@ struct il2cppString : Il2CppObject // Credits: il2cpp resolver (https://github.c
     }
 };
 
+using StaticString_t = il2cppString*(*)();
+
 
 std::string GetProtectedExportName() {
     /* SXITXMA
@@ -196,13 +198,22 @@ std::string Field_ReturnType(FieldInfo* field)
     return std::string(il2cpp_class_get_name(field_class));
 }
 
-std::string dump_method(Il2CppClass *klass) {
+StaticString_t get_version_m{ nullptr };
+std::string dump_method(Il2CppClass *klass, const char* ns, const std::string& klassName) {
     std::stringstream outPut;
     outPut << "\n\t// Methods\n\n";
     void *iter = nullptr;
     while (auto method = il2cpp_class_get_methods(klass, &iter)) {
         //TODO attribute
+        const char* methodName = il2cpp_method_get_name(method);
         if (method->methodPointer) {
+            if (!get_version_m
+                && klassName == "Application"
+                && (strcmp(ns, "UnityEngine") == 0)
+                && (strcmp(methodName, "get_version") == 0)
+                )
+                get_version_m = (StaticString_t)method->methodPointer;
+
             outPut << "\t// RVA: 0x";
             outPut << std::hex << (uint64_t) method->methodPointer - il2cpp_base;
             outPut << " VA: 0x";
@@ -219,7 +230,7 @@ std::string dump_method(Il2CppClass *klass) {
             outPut << "ref ";
         }
         auto return_class = il2cpp_class_from_type(return_type);
-        outPut << GetFullType(return_type) << " " << il2cpp_method_get_name(method) << "(";
+        outPut << GetFullType(return_type) << " " << methodName << "(";
         auto param_count = il2cpp_method_get_param_count(method);
         for (int i = 0; i < (int)param_count; ++i) {
             auto param = il2cpp_method_get_param(method, i);
@@ -392,8 +403,12 @@ std::string dump_field(Il2CppClass *klass) {
 
 std::string dump_type(const Il2CppType *type) {
     std::stringstream outPut;
+    
     auto *klass = il2cpp_class_from_type(type);
-    outPut << "\n// Namespace: " << il2cpp_class_get_namespace(klass) << "\n";
+    std::string klassName = GetFullType(type);
+    const char* klassNamespace = il2cpp_class_get_namespace(klass);
+
+    outPut << "\n// Namespace: " << klassNamespace << "\n";
     auto flags = il2cpp_class_get_flags(klass);
     if (flags & TYPE_ATTRIBUTE_SERIALIZABLE) {
         outPut << "[Serializable]\n";
@@ -438,18 +453,18 @@ std::string dump_type(const Il2CppType *type) {
     } else {
         outPut << "class ";
     }
-    outPut << GetFullType(il2cpp_class_get_type(klass));//il2cpp_class_get_name(klass);
+    outPut << klassName;
     std::vector<std::string> extends;
     auto parent = il2cpp_class_get_parent(klass);
     if (!is_valuetype && !is_enum && parent) {
         auto parent_type = il2cpp_class_get_type(parent);
         if (parent_type->type != IL2CPP_TYPE_OBJECT) {
-            extends.emplace_back(il2cpp_class_get_name(parent));
+            extends.emplace_back(GetFullType(parent_type));
         }
     }
     void *iter = nullptr;
     while (auto itf = il2cpp_class_get_interfaces(klass, &iter)) {
-        extends.emplace_back(il2cpp_class_get_name(itf));
+        extends.emplace_back(GetFullType(il2cpp_class_get_type(itf)));
     }
     if (!extends.empty()) {
         outPut << " : " << extends[0];
@@ -460,7 +475,7 @@ std::string dump_type(const Il2CppType *type) {
     outPut << "\n{";
     outPut << dump_field(klass);
     outPut << dump_property(klass);
-    outPut << dump_method(klass);
+    outPut << dump_method(klass, klassNamespace, klassName);
     //TODO EventInfo
     outPut << "}\n";
     return outPut.str();
@@ -564,7 +579,17 @@ void il2cpp_dump(void *handle, char *outDir, const char* il2cppModuleName) {
         }
     }
     LOGI("write dump file");
-    auto outPath = std::string(outDir).append("dump.cs");
+    
+    auto outPath = std::string(outDir).append("dump");
+    if (FORMATED_FILE_NAME)
+    {
+        outPath.push_back('-');
+        outPath.append(get_version_m()->ToString().c_str());
+    }
+    outPath.append(".cs");
+
+    LOGI("File Name: %s", outPath.c_str());
+
     std::ofstream outStream(outPath);
     outStream << imageOutput.str();
     auto count = outPuts.size();
